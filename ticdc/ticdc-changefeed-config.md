@@ -16,7 +16,7 @@ cdc cli changefeed create --server=http://10.0.10.25:8300 --sink-uri="mysql://ro
 ```shell
 Create changefeed successfully!
 ID: simple-replication-task
-Info: {"upstream_id":7178706266519722477,"namespace":"default","id":"simple-replication-task","sink_uri":"mysql://root:xxxxx@127.0.0.1:4000/?time-zone=","create_time":"2024-12-05T15:05:46.679218+08:00","start_ts":438156275634929669,"engine":"unified","config":{"case_sensitive":false,"force_replicate":false,"ignore_ineligible_table":false,"check_gc_safe_point":true,"enable_sync_point":true,"bdr_mode":false,"sync_point_interval":30000000000,"sync_point_retention":3600000000000,"filter":{"rules":["test.*"],"event_filters":null},"mounter":{"worker_num":16},"sink":{"protocol":"","schema_registry":"","csv":{"delimiter":",","quote":"\"","null":"\\N","include_commit_ts":false},"column_selectors":null,"transaction_atomicity":"none","encoder_concurrency":16,"terminator":"\r\n","date_separator":"none","enable_partition_separator":false},"consistent":{"level":"none","max_log_size":64,"flush_interval":2000,"storage":""}},"state":"normal","creator_version":"v8.5.0"}
+Info: {"upstream_id":7178706266519722477,"namespace":"default","id":"simple-replication-task","sink_uri":"mysql://root:xxxxx@127.0.0.1:4000/?time-zone=","create_time":"{{{ .tidb-release-date }}}T15:05:46.679218+08:00","start_ts":438156275634929669,"engine":"unified","config":{"case_sensitive":false,"force_replicate":false,"ignore_ineligible_table":false,"check_gc_safe_point":true,"enable_sync_point":true,"bdr_mode":false,"sync_point_interval":30000000000,"sync_point_retention":3600000000000,"filter":{"rules":["test.*"],"event_filters":null},"mounter":{"worker_num":16},"sink":{"protocol":"","schema_registry":"","csv":{"delimiter":",","quote":"\"","null":"\\N","include_commit_ts":false},"column_selectors":null,"transaction_atomicity":"none","encoder_concurrency":16,"terminator":"\r\n","date_separator":"none","enable_partition_separator":false},"consistent":{"level":"none","max_log_size":64,"flush_interval":2000,"storage":""}},"state":"normal","creator_version":"v{{{ .tidb-version }}}"}
 ```
 
 - `--changefeed-id`: The ID of the replication task. The format must match the `^[a-zA-Z0-9]+(\-[a-zA-Z0-9]+)*$` regular expression. If this ID is not specified, TiCDC automatically generates a UUID (the version 4 format) as the ID.
@@ -151,12 +151,12 @@ For more information, see [Event filter rules](/ticdc/ticdc-filter.md#event-filt
 #### `enable-table-across-nodes`
 
 - Allocate tables to multiple TiCDC nodes for replication on a per-Region basis.
-- In the [TiCDC classic architecture](/ticdc/ticdc-classic-architecture.md), this configuration item only takes effect on Kafka changefeeds and is not supported on MySQL changefeeds. 
+- In the [TiCDC classic architecture](/ticdc/ticdc-classic-architecture.md), this configuration item only takes effect on Kafka changefeeds and is not supported on MySQL changefeeds.
 - In the [TiCDC new architecture](/ticdc/ticdc-architecture.md), this configuration item works on all types of downstream changefeeds. For more information, see [New features](/ticdc/ticdc-architecture.md#new-features).
 - When `enable-table-across-nodes` is enabled, there are two allocation modes:
 
     1. Allocate tables based on the number of Regions, so that each TiCDC node handles roughly the same number of Regions. If the number of Regions for a table exceeds the value of [`region-threshold`](#region-threshold), the table will be allocated to multiple nodes for replication. 
-    2. Allocate tables based on the write traffic, so that each TiCDC node handles roughly the same number of modified rows. Only when the number of modified rows per minute in a table exceeds the value of [`write-key-threshold`](#write-key-threshold), will this allocation take effect.
+    2. Allocate tables based on the write traffic, so that each TiCDC node handles a similar amount of write load. In the [TiCDC classic architecture](/ticdc/ticdc-classic-architecture.md), this mode uses the upstream PD Region `written_keys` statistics. In the [TiCDC new architecture](/ticdc/ticdc-architecture.md), this mode uses the sink DML event size per second. Only when a table's write traffic exceeds the value of [`write-key-threshold`](#write-key-threshold), will this allocation take effect.
 
   You only need to configure one of the two modes. If both `region-threshold` and `write-key-threshold` are configured, TiCDC prioritizes the traffic allocation mode, namely `write-key-threshold`.
 
@@ -165,8 +165,8 @@ For more information, see [Event filter rules](/ticdc/ticdc-filter.md#event-filt
 
 #### `region-count-per-span` <span class="version-mark">New in v8.5.4</span>
 
-- Introduced in the [TiCDC new architecture](/ticdc/ticdc-architecture.md). During changefeed initialization, tables that meet the split conditions are split according to this parameter. After splitting, each split sub-table contains at most `region-count-per-span` Regions.
-- Default value: `100` 
+- Introduced in the [TiCDC new architecture](/ticdc/ticdc-architecture.md). During changefeed initialization, TiCDC splits tables that meet the split conditions according to this parameter. After splitting, each sub-table contains at most `region-count-per-span` Regions.
+- Default value: `100`
 
 #### `region-threshold`
 
@@ -174,7 +174,9 @@ For more information, see [Event filter rules](/ticdc/ticdc-filter.md#event-filt
 
 #### `write-key-threshold`
 
-- Default value: `0`, which means that the traffic allocation mode is not used by default
+- Default value: `0`, which disables traffic-based allocation by default.
+- In the [TiCDC new architecture](/ticdc/ticdc-architecture.md), this value is measured in sink DML event bytes per second. When `scheduler.enable-table-across-nodes = true`, any positive value smaller than `10485760` (10 MiB) is automatically adjusted to `10485760`.
+- In the [TiCDC classic architecture](/ticdc/ticdc-classic-architecture.md), this value is the threshold for the upstream PD Region `written_keys` statistics used by classic table splitting.
 
 ### sink
 
@@ -182,9 +184,10 @@ For more information, see [Event filter rules](/ticdc/ticdc-filter.md#event-filt
 
 #### `dispatchers`
 
-- When the changefeed downstream is an MQ sink, you can use `dispatchers` to configure event dispatchers. Starting from v8.5.7, for the [new TiCDC architecture](/ticdc/ticdc-architecture.md), you can also use `dispatchers` to configure table routing, mapping upstream tables to specific downstream database or table names. For more information, see [TiCDC table routing](/ticdc/ticdc-table-routing.md).
+- For the sink of MQ type, you can use dispatchers to configure the event dispatcher.
 - Starting from v6.1.0, TiDB supports two types of event dispatchers: partition and topic.
 - The matching syntax of matcher is the same as the filter rule syntax.
+- This configuration item only takes effect if the downstream is MQ.
 - When the downstream MQ is Pulsar, if the routing rule for `partition` is not specified as any of `ts`, `index-value`, `table`, or `default`, each Pulsar message will be routed using the string you set as the key. For example, if you specify the routing rule for a matcher as the string `code`, then all Pulsar messages that match that matcher will be routed with `code` as the key.
 
 #### `column-selectors` <span class="version-mark">New in v7.5.0</span>

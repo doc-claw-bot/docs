@@ -60,7 +60,7 @@ The new architecture supports **table-level task splitting** for all sinks. You 
 When this feature is enabled, TiCDC automatically splits and distributes tables across multiple nodes for parallel replication if those tables meet any of the following conditions. This improves replication efficiency and resource utilization:
 
 - The table Region count exceeds the configured threshold (`10000` by default, adjustable via `scheduler.region-threshold`).
-- The table write traffic exceeds the configured threshold (disabled by default, configurable via `scheduler.write-key-threshold`).
+- The table sink DML event throughput exceeds the configured threshold (disabled by default, configurable via `scheduler.write-key-threshold`, measured in bytes per second).
 
 > **Note:**
 >
@@ -73,8 +73,8 @@ After switching to the new TiCDC architecture, do not reuse the table-splitting 
 In table split mode, pay attention to the following settings:
 
 - [`scheduler.region-threshold`](/ticdc/ticdc-changefeed-config.md#region-threshold): the default value is `10000`. When the number of Regions in a table exceeds this threshold, TiCDC splits the table. For tables with relatively few Regions but high overall write throughput, you can reduce this value appropriately. This parameter must be greater than or equal to `scheduler.region-count-per-span`. Otherwise, tasks might be rescheduled repeatedly, which increases replication latency.
-- [`scheduler.region-count-per-span`](/ticdc/ticdc-changefeed-config.md#region-count-per-span-new-in-v854): the default value is `100`. During changefeed initialization, tables that meet the split conditions are split according to this parameter. After splitting, each split sub-table contains at most `region-count-per-span` regions.
-- [`scheduler.write-key-threshold`](/ticdc/ticdc-changefeed-config.md#write-key-threshold): the default value is `0` (disabled). When the sink write throughput of a table exceeds this threshold, TiCDC triggers table splitting. In most cases, keep this parameter to `0`.
+- [`scheduler.region-count-per-span`](/ticdc/ticdc-changefeed-config.md#region-count-per-span-new-in-v854): the default value is `100`. During changefeed initialization, TiCDC splits tables that meet the split conditions according to this parameter. After splitting, each sub-table contains at most `region-count-per-span` Regions.
+- [`scheduler.write-key-threshold`](/ticdc/ticdc-changefeed-config.md#write-key-threshold): the default value is `0` (disabled). In the new architecture, this value is measured in sink DML event bytes per second. If you set a positive value smaller than `10485760` (10 MiB), TiCDC automatically adjusts it to `10485760`. In most cases, keep this parameter at `0`.
 
 ## Compatibility
 
@@ -109,7 +109,14 @@ In the TiCDC classic architecture, DDL replication operations are strictly seria
 
 ## Limitations
 
-The new TiCDC architecture currently does not support splitting large transactions into multiple batches for downstream replication. As a result, there is still a risk of OOM when processing extremely large transactions. Make sure to evaluate and mitigate this risk appropriately before using the new architecture.
+The new TiCDC architecture incorporates all functionalities of the classic architecture. However, some features have not yet been fully tested. To ensure system stability, it is **NOT** recommended to use the following features in core production environments:
+
+- [Syncpoint](/ticdc/ticdc-upstream-downstream-check.md)
+- [Redo Log](/ticdc/ticdc-sink-to-mysql.md#eventually-consistent-replication-in-disaster-scenarios)
+- [Pulsar Sink](/ticdc/ticdc-sink-to-pulsar.md)
+- [Storage Sink](/ticdc/ticdc-sink-to-cloud-storage.md)
+
+In addition, the new TiCDC architecture currently does not support splitting large transactions into multiple batches for downstream replication. As a result, there is still a risk of OOM when processing extremely large transactions. Make sure to evaluate and mitigate this risk appropriately before using the new architecture.
 
 ## Upgrade guide
 
@@ -145,7 +152,7 @@ When deploying a new TiDB cluster of v8.5.4 or later using TiDB Operator, you ca
 spec:
   ticdc:
     baseImage: pingcap/ticdc
-    version: v{{{ .ticdc-version }}}
+    version: v8.5.4
     replicas: 3
     config:
       newarch = true
@@ -169,10 +176,10 @@ To deploy TiCDC nodes in the new architecture using TiUP, take the following ste
 
     The download link follows this format: `https://tiup-mirrors.pingcap.com/cdc-${version}-${os}-${arch}.tar.gz`, where `${version}` is the TiCDC version (see [TiCDC releases for the new architecture](https://github.com/pingcap/ticdc/releases) for available versions), `${os}` is your operating system, and `${arch}` is the platform the component runs on (`amd64` or `arm64`).
 
-    For example, to download the binary package of TiCDC v{{{ .ticdc-version }}} for Linux (x86-64), run the following command:
+    For example, to download the binary package of TiCDC v8.5.4-release.1 for Linux (x86-64), run the following command:
 
     ```shell
-    wget https://tiup-mirrors.pingcap.com/cdc-v{{{ .ticdc-version }}}-linux-amd64.tar.gz
+    wget https://tiup-mirrors.pingcap.com/cdc-v8.5.4-release.1-linux-amd64.tar.gz
     ```
 
 3. If your TiDB cluster has running changefeeds, refer to [Pause a replication task](/ticdc/ticdc-manage-changefeed.md#pause-a-replication-task) to pause all replication tasks of the changefeeds.
@@ -185,7 +192,7 @@ To deploy TiCDC nodes in the new architecture using TiUP, take the following ste
 4. Patch the downloaded TiCDC binary file to your TiDB cluster using the [`tiup cluster patch`](/tiup/tiup-component-cluster-patch.md) command:
 
     ```shell
-    tiup cluster patch <cluster-name> ./cdc-v{{{ .ticdc-version }}}-linux-amd64.tar.gz -R cdc --overwrite
+    tiup cluster patch <cluster-name> ./cdc-v8.5.4-release.1-linux-amd64.tar.gz -R cdc --overwrite
     ```
 
 5. Update the TiCDC configuration using the [`tiup cluster edit-config`](/tiup/tiup-component-cluster-edit-config.md) command to enable the new architecture:
@@ -220,7 +227,7 @@ To deploy TiCDC nodes in the new architecture in an existing TiDB cluster using 
     spec:
       ticdc:
         baseImage: pingcap/ticdc
-        version: v{{{ .ticdc-version }}}
+        version: v8.5.4-release.1
         replicas: 3
         config:
           newarch = true
@@ -249,7 +256,7 @@ To deploy TiCDC nodes in the new architecture in an existing TiDB cluster using 
         spec:
           ticdc:
             baseImage: pingcap/ticdc
-            version: v{{{ .ticdc-version }}}
+            version: v8.5.4-release.1
             replicas: 3
         ```
 
